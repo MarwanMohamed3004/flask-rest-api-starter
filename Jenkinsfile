@@ -4,15 +4,36 @@ pipeline {
         label 'ubuntu-client'
     }
 
+    options {
+        skipDefaultCheckout(true)
+    }
+
+    environment {
+        // CHANGE THIS to your Docker Hub username
+        IMAGE_REPO = 'YOUR_DOCKERHUB_USERNAME/flask-rest-api-starter'
+    }
+
     stages {
 
+        // 1. Checkout source code
         stage('Checkout') {
             steps {
                 checkout scm
-                echo 'Source code downloaded on Ubuntu Client!'
+                echo 'Source code downloaded successfully!'
             }
         }
 
+        // 2. Verify Docker
+        stage('Check Docker') {
+            steps {
+                sh '''
+                    docker --version
+                    docker info
+                '''
+            }
+        }
+
+        // 3. Install Python dependencies
         stage('Install Dependencies') {
             steps {
                 sh '''
@@ -22,6 +43,7 @@ pipeline {
             }
         }
 
+        // 4. Run application tests
         stage('Run Tests') {
             steps {
                 sh '''
@@ -30,50 +52,151 @@ pipeline {
             }
         }
 
-        stage('Deploy to Ubuntu Client') {
+        // 5. Build Docker image
+        stage('Build Docker Image') {
             steps {
                 sh '''
                     set -e
 
-                    APP_DIR="/home/marwan/flask-app"
+                    echo "Building Docker image..."
 
-                    echo "Copying application files..."
-                    mkdir -p "$APP_DIR"
-                    cp app.py requirements.txt "$APP_DIR/"
+                    docker build --pull \
+                        -t "$IMAGE_REPO:$BUILD_NUMBER" \
+                        -t "$IMAGE_REPO:latest" .
 
-                    echo "Installing production dependencies..."
-                    cd "$APP_DIR"
-                    python3 -m venv .venv
-                    .venv/bin/pip install -r requirements.txt
+                    echo "Docker image built successfully!"
 
-                    echo "Restarting Flask application..."
-                    sudo -n /usr/bin/systemctl restart flask-app
-
-                    echo "Checking application status..."
-                    sudo -n /usr/bin/systemctl is-active flask-app
+                    docker images "$IMAGE_REPO"
                 '''
             }
         }
 
+        // 6. Scan Docker image using Trivy
+        stage('Security Scan') {
+            steps {
+                sh '''
+                    echo "Scanning Docker image for vulnerabilities..."
+
+                    trivy image \
+                        --severity HIGH,CRITICAL \
+                        --exit-code 1 \
+                        --ignore-unfixed \
+                        "$IMAGE_REPO:$BUILD_NUMBER"
+
+                    echo "Security scan passed!"
+                '''
+            }
+        }
+
+        // 7. Push Docker image to Docker Hub
+        stage('Push to Docker Hub') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DOCKERHUB_USERNAME',
+                        passwordVariable: 'DOCKERHUB_TOKEN'
+                    )
+                ]) {
+                    sh '''
+                        set -eu
+                        set +x
+
+                        trap 'docker logout >/dev/null 2>&1 || true' EXIT
+
+                        echo "$DOCKERHUB_TOKEN" | docker login \
+                            --username "$DOCKERHUB_USERNAME" \
+                            --password-stdin
+
+                        echo "Pushing versioned image..."
+                        docker push "$IMAGE_REPO:$BUILD_NUMBER"
+
+                        echo "Pushing latest image..."
+                        docker push "$IMAGE_REPO:latest"
+
+                        echo "Images successfully pushed to Docker Hub!"
+                    '''
+                }
+            }
+        }
+
+        // 8. Deploy Docker container
+        stage('Deploy Docker Container') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DOCKERHUB_USERNAME',
+                        passwordVariable: 'DOCKERHUB_TOKEN'
+                    )
+                ]) {
+                    sh '''
+                        set -eu
+                        set +x
+
+                        trap 'docker logout >/dev/null 2>&1 || true' EXIT
+
+                        echo "$DOCKERHUB_TOKEN" | docker login \
+                            --username "$DOCKERHUB_USERNAME" \
+                            --password-stdin
+
+                        echo "Pulling image from Docker Hub..."
+                        docker pull "$IMAGE_REPO:$BUILD_NUMBER"
+                    '''
+                }
+
+                sh '''
+                    set -e
+
+                    echo "Removing previous container if it exists..."
+                    docker rm -f flask-api || true
+
+                    echo "Starting new container..."
+
+                    docker run -d \
+                        --name flask-api \
+                        --restart unless-stopped \
+                        -p 5001:8080 \
+                        "$IMAGE_REPO:$BUILD_NUMBER"
+
+                    echo "Container deployed successfully!"
+
+                    docker ps
+                '''
+            }
+        }
+
+        // 9. Verify deployed API
         stage('Verify API') {
             steps {
                 sh '''
                     python3 - <<'PY'
 import json
+import time
 import urllib.request
 
-url = "http://127.0.0.1:5000/items"
+url = "http://127.0.0.1:5001/items"
 
-with urllib.request.urlopen(url, timeout=10) as response:
-    data = json.loads(response.read().decode())
+for attempt in range(1, 31):
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            data = json.loads(response.read().decode())
 
-    print("HTTP Status:", response.status)
-    print("API Response:", data)
+            print("HTTP Status:", response.status)
+            print("API Response:", data)
 
-    assert response.status == 200
-    assert isinstance(data, list)
+            assert response.status == 200
+            assert isinstance(data, list)
 
-print("API verification successful!")
+            print("API verification successful!")
+            break
+
+    except Exception as error:
+        if attempt == 30:
+            raise
+
+        print(f"Waiting for application... Attempt {attempt}")
+        time.sleep(2)
 PY
                 '''
             }
@@ -82,11 +205,13 @@ PY
 
     post {
         success {
-            echo 'Deployment completed successfully!'
+            echo 'CI/CD Pipeline completed successfully!'
+            echo 'Docker image built, scanned, pushed and deployed!'
         }
 
         failure {
-            echo 'Pipeline failed. Check the console output.'
+            echo 'Pipeline failed! Check the stage logs.'
         }
     }
 }
+
