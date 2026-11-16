@@ -10,7 +10,7 @@ pipeline {
 
     environment {
         // CHANGE THIS to your Docker Hub username
-        IMAGE_REPO = 'YOUR_DOCKERHUB_USERNAME/flask-rest-api-starter'
+        IMAGE_REPO = 'marwan304/flask-rest-api-starter'
     }
 
     stages {
