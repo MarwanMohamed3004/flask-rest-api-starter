@@ -1,15 +1,7 @@
 
 pipeline {
-    agent any
-
-    options {
-        skipDefaultCheckout(true)
-    }
-
-    environment {
-        DEPLOY_HOST = '192.168.56.102'
-        DEPLOY_USER = 'marwan'
-        DEPLOY_DIR = '/home/marwan/flask-app'
+    agent {
+        label 'ubuntu-client'
     }
 
     stages {
@@ -17,7 +9,7 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
-                echo 'Source code downloaded!'
+                echo 'Source code downloaded on Ubuntu Client!'
             }
         }
 
@@ -25,8 +17,7 @@ pipeline {
             steps {
                 sh '''
                     python3 -m venv .venv
-                    . .venv/bin/activate
-                    pip install -r requirements.txt
+                    .venv/bin/pip install -r requirements.txt
                 '''
             }
         }
@@ -34,52 +25,33 @@ pipeline {
         stage('Run Tests') {
             steps {
                 sh '''
-                    . .venv/bin/activate
-                    python test_app.py
+                    .venv/bin/python test_app.py
                 '''
             }
         }
 
         stage('Deploy to Ubuntu Client') {
             steps {
-                sshagent(credentials: ['client-deploy-key']) {
+                sh '''
+                    set -e
 
-                    sh '''
-                        set -e
+                    APP_DIR="/home/marwan/flask-app"
 
-                        echo "Creating application directory..."
+                    echo "Copying application files..."
+                    mkdir -p "$APP_DIR"
+                    cp app.py requirements.txt "$APP_DIR/"
 
-                        ssh -o StrictHostKeyChecking=no \
-                            $DEPLOY_USER@$DEPLOY_HOST \
-                            "mkdir -p $DEPLOY_DIR"
+                    echo "Installing production dependencies..."
+                    cd "$APP_DIR"
+                    python3 -m venv .venv
+                    .venv/bin/pip install -r requirements.txt
 
-                        echo "Copying application files..."
+                    echo "Restarting Flask application..."
+                    sudo -n /usr/bin/systemctl restart flask-app
 
-                        scp -o StrictHostKeyChecking=no \
-                            app.py requirements.txt \
-                            $DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_DIR/
-
-                        echo "Installing application dependencies..."
-
-                        ssh -o StrictHostKeyChecking=no \
-                            $DEPLOY_USER@$DEPLOY_HOST \
-                            "cd $DEPLOY_DIR && \
-                            python3 -m venv .venv && \
-                            .venv/bin/pip install -r requirements.txt"
-
-                        echo "Restarting Flask application..."
-
-                        ssh -o StrictHostKeyChecking=no \
-                            $DEPLOY_USER@$DEPLOY_HOST \
-                            "sudo -n /usr/bin/systemctl restart flask-app"
-
-                        echo "Checking application status..."
-
-                        ssh -o StrictHostKeyChecking=no \
-                            $DEPLOY_USER@$DEPLOY_HOST \
-                            "sudo -n /usr/bin/systemctl is-active flask-app"
-                    '''
-                }
+                    echo "Checking application status..."
+                    sudo -n /usr/bin/systemctl is-active flask-app
+                '''
             }
         }
 
@@ -90,17 +62,16 @@ pipeline {
 import json
 import urllib.request
 
-url = 'http://192.168.56.102:5000/items'
+url = "http://127.0.0.1:5000/items"
 
-response = urllib.request.urlopen(url, timeout=10)
+with urllib.request.urlopen(url, timeout=10) as response:
+    data = json.loads(response.read().decode())
 
-data = json.loads(response.read().decode())
+    print("HTTP Status:", response.status)
+    print("API Response:", data)
 
-print("HTTP Status:", response.status)
-print("API Response:", data)
-
-assert response.status == 200
-assert isinstance(data, list)
+    assert response.status == 200
+    assert isinstance(data, list)
 
 print("API verification successful!")
 PY
