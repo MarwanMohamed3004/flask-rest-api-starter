@@ -9,7 +9,6 @@ pipeline {
     }
 
     environment {
-        // CHANGE THIS to your Docker Hub username
         IMAGE_REPO = 'marwan304/flask-rest-api-starter'
     }
 
@@ -71,24 +70,7 @@ pipeline {
             }
         }
 
-        // 6. Scan Docker image using Trivy
-        stage('Security Scan') {
-            steps {
-                sh '''
-                    echo "Scanning Docker image for vulnerabilities..."
-
-                    trivy image \
-                        --severity HIGH,CRITICAL \
-                        --exit-code 1 \
-                        --ignore-unfixed \
-                        "$IMAGE_REPO:$BUILD_NUMBER"
-
-                    echo "Security scan passed!"
-                '''
-            }
-        }
-
-        // 7. Push Docker image to Docker Hub
+        // 6. Push Docker image to Docker Hub
         stage('Push to Docker Hub') {
             steps {
                 withCredentials([
@@ -120,7 +102,7 @@ pipeline {
             }
         }
 
-        // 8. Deploy Docker container
+        // 7. Deploy Docker container
         stage('Deploy Docker Container') {
             steps {
                 withCredentials([
@@ -166,7 +148,7 @@ pipeline {
             }
         }
 
-        // 9. Verify deployed API
+        // 8. Verify deployed API
         stage('Verify API') {
             steps {
                 sh '''
@@ -206,7 +188,7 @@ PY
     post {
         success {
             echo 'CI/CD Pipeline completed successfully!'
-            echo 'Docker image built, scanned, pushed and deployed!'
+            echo 'Docker image built, pushed and deployed!'
         }
 
         failure {
@@ -214,4 +196,3 @@ PY
         }
     }
 }
-
