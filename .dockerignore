@@ -1,0 +1,22 @@
+
+# Python virtual environments
+.venv/
+**/.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Git files
+.git/
+.gitignore
+
+# Environment and secrets
+.env
+.env.*
+
+# Testing and development
+.pytest_cache/
+.coverage
