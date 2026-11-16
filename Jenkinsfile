@@ -70,7 +70,25 @@ pipeline {
             }
         }
 
-        // 6. Push Docker image to Docker Hub
+        // 6. Security Scan using Trivy
+        stage('Security Scan') {
+            steps {
+                sh '''
+                    echo "Starting Docker image security scan..."
+
+                    trivy image \
+                        --scanners vuln \
+                        --severity HIGH,CRITICAL \
+                        --ignore-unfixed \
+                        --exit-code 0 \
+                        "$IMAGE_REPO:$BUILD_NUMBER"
+
+                    echo "Security scan completed!"
+                '''
+            }
+        }
+
+        // 7. Push Docker image to Docker Hub
         stage('Push to Docker Hub') {
             steps {
                 withCredentials([
@@ -102,7 +120,7 @@ pipeline {
             }
         }
 
-        // 7. Deploy Docker container
+        // 8. Deploy Docker container
         stage('Deploy Docker Container') {
             steps {
                 withCredentials([
@@ -148,7 +166,7 @@ pipeline {
             }
         }
 
-        // 8. Verify deployed API
+        // 9. Verify deployed API
         stage('Verify API') {
             steps {
                 sh '''
@@ -188,7 +206,7 @@ PY
     post {
         success {
             echo 'CI/CD Pipeline completed successfully!'
-            echo 'Docker image built, pushed and deployed!'
+            echo 'Docker image built, security scanned, pushed and deployed!'
         }
 
         failure {
