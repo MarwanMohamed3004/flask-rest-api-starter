@@ -1,8 +1,6 @@
 
 pipeline {
-    agent {
-        label 'ubuntu-client'
-    }
+    agent none
 
     options {
         skipDefaultCheckout(true)
@@ -10,119 +8,149 @@ pipeline {
 
     environment {
         IMAGE_REPO = 'marwan304/flask-rest-api-starter'
+        DEPLOY_HOST = '192.168.56.102'
     }
 
     stages {
 
-        // 1. Checkout source code
-        stage('Checkout') {
-            steps {
-                checkout scm
-                echo 'Source code downloaded successfully!'
+        // ==========================================
+        // PART 1: CI ON JENKINS CONTROLLER
+        // Ubuntu Server
+        // ==========================================
+
+        stage('CI on Jenkins Controller') {
+
+            agent {
+                label 'built-in'
             }
-        }
 
-        // 2. Verify Docker
-        stage('Check Docker') {
-            steps {
-                sh '''
-                    docker --version
-                    docker info
-                '''
-            }
-        }
+            stages {
 
-        // 3. Install Python dependencies
-        stage('Install Dependencies') {
-            steps {
-                sh '''
-                    python3 -m venv .venv
-                    .venv/bin/pip install -r requirements.txt
-                '''
-            }
-        }
+                // 1. Checkout source code
+                stage('Checkout') {
+                    steps {
+                        checkout scm
 
-        // 4. Run application tests
-        stage('Run Tests') {
-            steps {
-                sh '''
-                    .venv/bin/python test_app.py
-                '''
-            }
-        }
+                        echo 'Source code downloaded successfully!'
+                    }
+                }
 
-        // 5. Build Docker image
-        stage('Build Docker Image') {
-            steps {
-                sh '''
-                    set -e
+                // 2. Verify Docker
+                stage('Check Docker') {
+                    steps {
+                        sh '''
+                            docker --version
+                            docker info
+                        '''
+                    }
+                }
 
-                    echo "Building Docker image..."
+                // 3. Install Python dependencies
+                stage('Install Dependencies') {
+                    steps {
+                        sh '''
+                            python3 -m venv .venv
+                            .venv/bin/pip install -r requirements.txt
+                        '''
+                    }
+                }
 
-                    docker build --pull \
-                        -t "$IMAGE_REPO:$BUILD_NUMBER" \
-                        -t "$IMAGE_REPO:latest" .
+                // 4. Run application tests
+                stage('Run Tests') {
+                    steps {
+                        sh '''
+                            .venv/bin/python test_app.py
+                        '''
+                    }
+                }
 
-                    echo "Docker image built successfully!"
+                // 5. Build Docker image
+                stage('Build Docker Image') {
+                    steps {
+                        sh '''
+                            set -e
 
-                    docker images "$IMAGE_REPO"
-                '''
-            }
-        }
+                            echo "Building Docker image on Jenkins Controller..."
 
-        // 6. Security Scan using Trivy
-        stage('Security Scan') {
-            steps {
-                sh '''
-                    echo "Starting Docker image security scan..."
+                            docker build --pull \
+                                -t "$IMAGE_REPO:$BUILD_NUMBER" \
+                                -t "$IMAGE_REPO:latest" .
 
-                    trivy image \
-                        --scanners vuln \
-                        --severity HIGH,CRITICAL \
-                        --ignore-unfixed \
-                        --exit-code 0 \
-                        "$IMAGE_REPO:$BUILD_NUMBER"
+                            echo "Docker image built successfully!"
 
-                    echo "Security scan completed!"
-                '''
-            }
-        }
+                            docker images "$IMAGE_REPO"
+                        '''
+                    }
+                }
 
-        // 7. Push Docker image to Docker Hub
-        stage('Push to Docker Hub') {
-            steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'dockerhub-credentials',
-                        usernameVariable: 'DOCKERHUB_USERNAME',
-                        passwordVariable: 'DOCKERHUB_TOKEN'
-                    )
-                ]) {
-                    sh '''
-                        set -eu
-                        set +x
+                // 6. Security scan using Trivy
+                stage('Security Scan') {
+                    steps {
+                        sh '''
+                            echo "Starting Trivy security scan..."
 
-                        trap 'docker logout >/dev/null 2>&1 || true' EXIT
+                            trivy --config "" image \
+                                --scanners vuln \
+                                --severity HIGH,CRITICAL \
+                                --ignore-unfixed \
+                                --exit-code 0 \
+                                "$IMAGE_REPO:$BUILD_NUMBER"
 
-                        echo "$DOCKERHUB_TOKEN" | docker login \
-                            --username "$DOCKERHUB_USERNAME" \
-                            --password-stdin
+                            echo "Security scan completed!"
+                        '''
+                    }
+                }
 
-                        echo "Pushing versioned image..."
-                        docker push "$IMAGE_REPO:$BUILD_NUMBER"
+                // 7. Push image to Docker Hub
+                stage('Push to Docker Hub') {
+                    steps {
+                        withCredentials([
+                            usernamePassword(
+                                credentialsId: 'dockerhub-credentials',
+                                usernameVariable: 'DOCKERHUB_USERNAME',
+                                passwordVariable: 'DOCKERHUB_TOKEN'
+                            )
+                        ]) {
+                            sh '''
+                                set -eu
+                                set +x
 
-                        echo "Pushing latest image..."
-                        docker push "$IMAGE_REPO:latest"
+                                trap 'docker logout >/dev/null 2>&1 || true' EXIT
 
-                        echo "Images successfully pushed to Docker Hub!"
-                    '''
+                                echo "$DOCKERHUB_TOKEN" | docker login \
+                                    --username "$DOCKERHUB_USERNAME" \
+                                    --password-stdin
+
+                                echo "Pushing versioned image..."
+
+                                docker push "$IMAGE_REPO:$BUILD_NUMBER"
+
+                                echo "Pushing latest image..."
+
+                                docker push "$IMAGE_REPO:latest"
+
+                                echo "Images pushed successfully!"
+                            '''
+                        }
+                    }
                 }
             }
         }
 
-        // 8. Deploy Docker container
+        // ==========================================
+        // PART 2: DEPLOYMENT ON UBUNTU CLIENT
+        // Jenkins Agent
+        // ==========================================
+
         stage('Deploy Docker Container') {
+
+            agent {
+                label 'ubuntu-client'
+            }
+
             steps {
+
+                // Pull image from Docker Hub
                 withCredentials([
                     usernamePassword(
                         credentialsId: 'dockerhub-credentials',
@@ -141,17 +169,20 @@ pipeline {
                             --password-stdin
 
                         echo "Pulling image from Docker Hub..."
+
                         docker pull "$IMAGE_REPO:$BUILD_NUMBER"
                     '''
                 }
 
+                // Deploy container
                 sh '''
                     set -e
 
-                    echo "Removing previous container if it exists..."
+                    echo "Removing previous container..."
+
                     docker rm -f flask-api || true
 
-                    echo "Starting new container..."
+                    echo "Starting new Docker container..."
 
                     docker run -d \
                         --name flask-api \
@@ -159,23 +190,33 @@ pipeline {
                         -p 5001:8080 \
                         "$IMAGE_REPO:$BUILD_NUMBER"
 
-                    echo "Container deployed successfully!"
+                    echo "Deployment successful!"
 
                     docker ps
                 '''
             }
         }
 
-        // 9. Verify deployed API
+        // ==========================================
+        // PART 3: VERIFY DEPLOYMENT
+        // Ubuntu Server
+        // ==========================================
+
         stage('Verify API') {
+
+            agent {
+                label 'built-in'
+            }
+
             steps {
                 sh '''
                     python3 - <<'PY'
 import json
+import os
 import time
 import urllib.request
 
-url = "http://127.0.0.1:5001/items"
+url = f"http://{os.environ['DEPLOY_HOST']}:5001/items"
 
 for attempt in range(1, 31):
     try:
@@ -191,7 +232,7 @@ for attempt in range(1, 31):
             print("API verification successful!")
             break
 
-    except Exception as error:
+    except Exception:
         if attempt == 30:
             raise
 
@@ -206,11 +247,11 @@ PY
     post {
         success {
             echo 'CI/CD Pipeline completed successfully!'
-            echo 'Docker image built, security scanned, pushed and deployed!'
+            echo 'Build, security scan, push and deployment completed!'
         }
 
         failure {
-            echo 'Pipeline failed! Check the stage logs.'
+            echo 'Pipeline failed! Check the console output.'
         }
     }
 }
